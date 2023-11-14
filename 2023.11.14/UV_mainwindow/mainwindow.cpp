@@ -1,0 +1,145 @@
+#include "mainwindow.h"
+#include "ui_mainwindow.h"
+
+MainWindow::MainWindow(QWidget *parent)//窗体的主函数
+    : QMainWindow(parent)
+    , ui(new Ui::MainWindow)
+{
+    ui->setupUi(this);//ui为窗体指针
+    this->setWindowTitle("Serial");//设置窗体title
+
+    mSerial = new QSerialPort(this);//新建串口类
+    updateSerialPorts();//更新串口
+
+    mSerialScanTimer = new QTimer(this);//新建一个定时器类
+    mSerialScanTimer->setInterval(5000);//定时间隔为5s
+    mSerialScanTimer->start();//每隔五秒对串口进行扫描
+
+    connect(mSerialScanTimer, &QTimer::timeout,
+            this, &MainWindow::updateSerialPorts);
+
+    connect(ui->lineEdit, &QLineEdit::returnPressed,
+            this, &MainWindow::on_send_Button_clicked);
+
+    connect(mSerial, &QSerialPort::readyRead,
+            this, &MainWindow::serialReadyRead);
+    //绘图部分
+
+    mData = QSharedPointer<QCPGraphDataContainer>(new QCPGraphDataContainer);
+
+    /* 绘图初始化 */
+    ui->plot->setInteractions(QCP::iRangeDrag | QCP::iRangeZoom);
+    ui->plot->legend->setVisible(true);
+    QFont legendFont = font();//字体
+    legendFont.setPointSize(10);//字号
+    ui->plot->legend->setFont(legendFont);
+    ui->plot->legend->setSelectedFont(legendFont);
+    ui->plot->legend->setSelectableParts(QCPLegend::spItems);
+    ui->plot->yAxis->setLabel("Magnitude");//设置y标题
+    ui->plot->xAxis->setLabel("Sample");//设置x标题
+    ui->plot->clearGraphs();
+    ui->plot->addGraph();//绘图
+
+    ui->plot->graph()->setPen(QPen(Qt::black));//曲线颜色
+    ui->plot->graph()->setData(mData);//添加绘制的点
+    ui->plot->graph()->setName("UV");//曲线名称
+}
+
+MainWindow::~MainWindow()//窗体析构函数
+{
+    delete ui;
+}
+void MainWindow::updateSerialPorts()//定时更行串口数据函数
+{
+    mSerialPorts = QSerialPortInfo::availablePorts();//显示所有现有的串口号
+
+    ui->serialComboBox->clear();//清空界面中comboxButton控件中的显示
+    for (QSerialPortInfo port : mSerialPorts) {//将刚刚更新的串口名逐一写入到combox控件中，方便使用者后续选择
+        ui->serialComboBox->addItem(port.portName(), port.systemLocation());
+    }
+}
+
+
+void MainWindow::on_connect_pushButton_clicked()//连接串口按钮按下时的响应函数
+{
+    ui->connect_pushButton->setEnabled(false);//使连接按钮处于无法点击的状态
+    QString serialLoc = ui->serialComboBox->currentData().toString();//选中combox控件中显示的串口号
+    if (mSerial->isOpen()) {
+        qDebug("Serial already connected, disconnecting!");// << "Serial already connected, disconnecting!";
+        mSerial->close();//关闭串口
+    }
+
+    mSerial->setPortName(serialLoc);//串口名
+    mSerial->setBaudRate(QSerialPort::Baud115200);//波特率
+    mSerial->setDataBits(QSerialPort::Data8);//数据位
+    mSerial->setParity(QSerialPort::NoParity);//无校验位
+    mSerial->setStopBits(QSerialPort::OneStop);//停止位设置为1
+    mSerial->setFlowControl(QSerialPort::NoFlowControl);//设置为无流控制
+
+    if(mSerial->open(QIODevice::ReadWrite)) {
+        qDebug("SERIAL: OK!") ;//输出调试信息
+    } else {
+        qDebug("SERIAL: ERROR!") ;//输出调试信息
+    }
+    ui->connect_pushButton->setEnabled(true);//令界面的连接按钮恢复点击状态
+}
+void MainWindow::on_send_Button_clicked()//发送按钮的响应函数
+{
+    if (mSerial->isOpen()) {//如果串口是打开的
+
+        QString str= ui->lineEdit->text(); //将lineEdit控件中的字符串放入str中
+            ui->lineEdit->clear();//情况lineEdit中的显示
+        str.append("\r\n");//在发送的数值末尾增加回车换行
+        mSerial->write(str.toLocal8Bit());//发送数据
+    } else {
+        qDebug( "Serial port not connected!");//qt调试窗口显示方便测试
+    }
+
+}
+void MainWindow::serialReadyRead()//串口数据收集处理函数
+{
+    QByteArray data = mSerial->readAll();//读取串口接受的数据
+    QString str = QString(data);//接受的数据放入str
+    ui->outputTextBrowser->insertPlainText(str);//数据显示在界面的Textbrowser控件中
+    QScrollBar *sb = ui->outputTextBrowser->verticalScrollBar();//textbrowser的滚动条
+    sb->setValue(sb->maximum());//保持textBROWSER控件内光标永远在最后一行。
+
+    //对接收的数据进行处理并进行绘制
+    if (str.startsWith("sample:",Qt::CaseInsensitive)) {
+        QStringList parts = str.split(" ");//wemosD1MINI上传的数据格式是三个部分，每个部分用空格分开。eg：sample：+空格+ID+空格+采集值
+        if (parts.size() == 3) {//判断采集数值正确
+            qDebug() << "Got a sample " << parts.at(1).toDouble() << parts.at(2).toDouble();//在调试栏输出收到的数值
+            double num = parts.at(1).toDouble();
+            double mag = parts.at(2).toDouble();
+            mData->add(QCPGraphData(num, mag));//将收到的数据放入mData中
+            ui->plot->rescaleAxes();//重设数周比例
+            ui->plot->replot();//重绘
+        }
+    }
+}
+
+void MainWindow::on_saveGraphButton_clicked()
+{
+    //step1：生成txt文件
+    QString filename = QFileDialog::getSaveFileName(this,
+                                                    tr("Save txt"), "",
+                                                    tr("Txt files (*.txt)"));//打开系统的打开文件对话框
+
+    if (!filename.isEmpty()) {
+        //ui->plot->savePdf(filename);//plot控件自带存pdf的方法
+        QFile file(filename);//定义文件名变量
+        if (!file.open(QFile::WriteOnly | QFile::Text))     //检测文件是否打开
+        {
+            QMessageBox::information(this, "Error Message", "Please Select a Text File!");
+            return;
+        }
+        QTextStream out(&file);                 //分行写入文件
+        out << ui->outputTextBrowser->toPlainText();//将textBrowser控件中的采集数据存入txt文件中。
+    }
+}
+void MainWindow::on_clear_Button_clicked()//清除绘图按钮点击后的响应函数
+{
+    mData->clear(); //清楚mData的值
+    ui->plot->rescaleAxes();//ui窗体上的plot控件重新规划数周
+    ui->plot->replot();//plot重绘
+}
