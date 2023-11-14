@@ -36,7 +36,7 @@ MainWindow::MainWindow(QWidget *parent)//窗体的主函数
     ui->plot->legend->setSelectedFont(legendFont);
     ui->plot->legend->setSelectableParts(QCPLegend::spItems);
     ui->plot->yAxis->setLabel("Magnitude");//设置y标题
-    ui->plot->xAxis->setLabel("Sample");//设置x标题
+    ui->plot->xAxis->setLabel("时间");//设置x标题
     ui->plot->clearGraphs();
     ui->plot->addGraph();//绘图
 
